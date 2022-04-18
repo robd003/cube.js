@@ -120,6 +120,31 @@ impl PostgresIntegrationTestSuite {
                         let value: f64 = row.get(idx);
                         values.push(value.to_string());
                     }
+                    // int4
+                    1007 => {
+                        let value: Vec<i32> = row.get(idx);
+                        values.push(
+                            value
+                                .into_iter()
+                                .map(|v| v.to_string())
+                                .collect::<Vec<String>>()
+                                .join(",")
+                                .to_string(),
+                        );
+                    }
+                    // _int8
+                    1016 => {
+                        let value: Vec<i64> = row.get(idx);
+                        values.push(
+                            value
+                                .into_iter()
+                                .map(|v| v.to_string())
+                                .collect::<Vec<String>>()
+                                .join(",")
+                                .to_string(),
+                        );
+                    }
+                    // _text
                     1009 => {
                         let value: Vec<String> = row.get(idx);
                         values.push(value.join(",").to_string());
@@ -240,7 +265,8 @@ impl AsyncTestSuite for PostgresIntegrationTestSuite {
                 'test',
                 1.0,
                 1,
-                ARRAY['test1', 'test2'] as str_arr
+                ARRAY['test1', 'test2'] as str_arr,
+                ARRAY[1,2,3] as int8_arr
             "#
             .to_string(),
         )

@@ -1,7 +1,5 @@
-use datafusion::arrow::datatypes::DataType;
 use std::{
     collections::HashMap,
-    io,
     io::{Error, ErrorKind},
     sync::Arc,
 };
@@ -14,6 +12,7 @@ use log::{debug, error, trace};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 
 use crate::sql::dataframe::DataFrame;
+use crate::sql::df_type_to_pg_tid;
 use crate::sql::extended::Portal;
 use crate::sql::protocol::Format;
 use crate::sql::statement::StatementPlaceholderReplacer;
@@ -469,64 +468,7 @@ impl AsyncPostgresShim {
                 for field in logical_plan.schema().fields() {
                     result.push(RowDescriptionField::new(
                         field.name().clone(),
-                        match field.data_type() {
-                            DataType::Boolean => PgType::get_by_tid(PgTypeId::BOOL),
-                            DataType::Int16 => PgType::get_by_tid(PgTypeId::INT2),
-                            DataType::Int32 => PgType::get_by_tid(PgTypeId::INT4),
-                            DataType::Int64 => PgType::get_by_tid(PgTypeId::INT8),
-                            DataType::UInt16 => PgType::get_by_tid(PgTypeId::INT8),
-                            DataType::UInt32 => PgType::get_by_tid(PgTypeId::INT8),
-                            DataType::UInt64 => PgType::get_by_tid(PgTypeId::INT8),
-                            DataType::Float32 => PgType::get_by_tid(PgTypeId::FLOAT4),
-                            DataType::Float64 => PgType::get_by_tid(PgTypeId::FLOAT8),
-                            DataType::Utf8 => PgType::get_by_tid(PgTypeId::TEXT),
-                            DataType::LargeUtf8 => PgType::get_by_tid(PgTypeId::TEXT),
-                            DataType::Null => PgType::get_by_tid(PgTypeId::BOOL),
-                            DataType::List(field) => match field.data_type() {
-                                DataType::Boolean => PgType::get_by_tid(PgTypeId::ArrayBool),
-                                DataType::Int8 => PgType::get_by_tid(PgTypeId::INT2),
-                                DataType::Int16 => PgType::get_by_tid(PgTypeId::INT2),
-                                DataType::Int32 => PgType::get_by_tid(PgTypeId::INT4),
-                                DataType::Int64 => PgType::get_by_tid(PgTypeId::INT8),
-                                DataType::UInt8 => PgType::get_by_tid(PgTypeId::INT2),
-                                DataType::UInt16 => PgType::get_by_tid(PgTypeId::INT2),
-                                DataType::UInt32 => PgType::get_by_tid(PgTypeId::INT4),
-                                DataType::UInt64 => PgType::get_by_tid(PgTypeId::INT8),
-                                DataType::Float16 => PgType::get_by_tid(PgTypeId::ArrayFloat4),
-                                DataType::Float32 => PgType::get_by_tid(PgTypeId::ArrayFloat4),
-                                DataType::Float64 => PgType::get_by_tid(PgTypeId::ArrayFloat8),
-                                DataType::Binary => PgType::get_by_tid(PgTypeId::ArrayBytea),
-                                DataType::Utf8 => PgType::get_by_tid(PgTypeId::ArrayText),
-                                dt => {
-                                    let message = format!(
-                                        "Unsupported data type in List for pg-wire: {:?}",
-                                        dt
-                                    );
-
-                                    self.write(protocol::ErrorResponse::new(
-                                        protocol::ErrorSeverity::Error,
-                                        protocol::ErrorCode::InternalError,
-                                        message.clone(),
-                                    ))
-                                    .await?;
-
-                                    return Err(io::Error::new(io::ErrorKind::Other, message));
-                                }
-                            },
-                            dt => {
-                                let message =
-                                    format!("Unsupported data type for pg-wire: {:?}", dt);
-
-                                self.write(protocol::ErrorResponse::new(
-                                    protocol::ErrorSeverity::Error,
-                                    protocol::ErrorCode::InternalError,
-                                    message.clone(),
-                                ))
-                                .await?;
-
-                                return Err(io::Error::new(io::ErrorKind::Other, message));
-                            }
-                        },
+                        df_type_to_pg_tid(field.data_type())?.to_type(),
                     ));
                 }
 

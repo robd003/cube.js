@@ -5,6 +5,7 @@ use crate::arrow::array::{
     Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use crate::arrow::datatypes::DataType;
+use crate::sql::df_type_to_pg_tid;
 use bytes::{BufMut, BytesMut};
 use std::convert::TryFrom;
 use std::io;
@@ -116,19 +117,27 @@ impl ToPostgresValue for ArrayRef {
         ("{".to_string() + &values.join(",") + "}").to_text(buf)
     }
 
+    // Example for ARRAY[1,2,3]::int8[]
+    // 0000   00 00 00 01 00 00 00 00 00 00 00 14 00 00 00 03   ................
+    // 0010   00 00 00 01 00 00 00 08 00 00 00 00 00 00 00 01   ................
+    // 0020   00 00 00 08 00 00 00 00 00 00 00 02 00 00 00 08   ................
+    // 0030   00 00 00 00 00 00 00 03                           ........
+    //
     // Example for ARRAY['test1', 'test2']
     // 0000   00 00 00 01 00 00 00 00 00 00 00 19 00 00 00 02   ................
     // 0010   00 00 00 01 00 00 00 05 74 65 73 74 31 00 00 00   ........test1...
     // 0020   05 74 65 73 74 32                                 .test2
     fn to_binary(&self, buf: &mut BytesMut) -> io::Result<()> {
         let mut tmp = BytesMut::new();
+        // row1 from the comment
         // dimensions
         tmp.put_i32(1);
         // has_nulls
         tmp.put_i32(0);
-        // element_type
-        tmp.put_u32(19);
-        tmp.put_u32(2);
+        tmp.put_u32(df_type_to_pg_tid(self.data_type())? as u32);
+        tmp.put_u32(self.len() as u32);
+
+        // row2 from the comment
         tmp.put_u32(1);
 
         macro_rules! write_native_array_as_binary {
@@ -269,14 +278,16 @@ impl<'a> Serialize for BatchWriter {
 
 #[cfg(test)]
 mod tests {
+    use crate::arrow::array::{ArrayRef, Int64Builder};
     use crate::sql::buffer;
     use crate::sql::protocol::Format;
     use crate::sql::writer::BatchWriter;
     use crate::CubeError;
     use std::io::Cursor;
+    use std::sync::Arc;
 
     #[tokio::test]
-    async fn test_backend_writer_text() -> Result<(), CubeError> {
+    async fn test_backend_writer_text_simple() -> Result<(), CubeError> {
         let mut cursor = Cursor::new(vec![]);
 
         let mut writer = BatchWriter::new(Format::Text);
@@ -304,7 +315,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_backend_writer_binary() -> Result<(), CubeError> {
+    async fn test_backend_writer_binary_simple() -> Result<(), CubeError> {
         let mut cursor = Cursor::new(vec![]);
 
         let mut writer = BatchWriter::new(Format::Binary);
@@ -325,6 +336,34 @@ mod tests {
                 68, 0, 0, 0, 20, 0, 2, 0, 0, 0, 5, 116, 101, 115, 116, 49, 0, 0, 0, 1, 1,
                 // row
                 68, 0, 0, 0, 20, 0, 2, 0, 0, 0, 5, 116, 101, 115, 116, 50, 0, 0, 0, 1, 1
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backend_writer_binary_array() -> Result<(), CubeError> {
+        let mut cursor = Cursor::new(vec![]);
+
+        let mut builder = Int64Builder::new(3);
+        builder.append_value(1)?;
+        builder.append_value(2)?;
+        builder.append_value(3)?;
+
+        let mut writer = BatchWriter::new(Format::Binary);
+        writer.write_value(Arc::new(builder.finish()) as ArrayRef)?;
+        writer.end_row()?;
+
+        buffer::write_direct(&mut cursor, writer).await?;
+
+        assert_eq!(
+            cursor.get_ref()[0..],
+            vec![
+                // DataRow header
+                68, 0, 0, 0, 66, 0, 1, 0, 0, 0, 56, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 3,
+                0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 2,
+                0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 3
             ]
         );
 
