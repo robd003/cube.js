@@ -482,9 +482,40 @@ impl AsyncPostgresShim {
                             DataType::Utf8 => PgType::get_by_tid(PgTypeId::TEXT),
                             DataType::LargeUtf8 => PgType::get_by_tid(PgTypeId::TEXT),
                             DataType::Null => PgType::get_by_tid(PgTypeId::BOOL),
-                            data_type => {
+                            DataType::List(field) => match field.data_type() {
+                                DataType::Boolean => PgType::get_by_tid(PgTypeId::ArrayBool),
+                                DataType::Int8 => PgType::get_by_tid(PgTypeId::INT2),
+                                DataType::Int16 => PgType::get_by_tid(PgTypeId::INT2),
+                                DataType::Int32 => PgType::get_by_tid(PgTypeId::INT4),
+                                DataType::Int64 => PgType::get_by_tid(PgTypeId::INT8),
+                                DataType::UInt8 => PgType::get_by_tid(PgTypeId::INT2),
+                                DataType::UInt16 => PgType::get_by_tid(PgTypeId::INT2),
+                                DataType::UInt32 => PgType::get_by_tid(PgTypeId::INT4),
+                                DataType::UInt64 => PgType::get_by_tid(PgTypeId::INT8),
+                                DataType::Float16 => PgType::get_by_tid(PgTypeId::ArrayFloat4),
+                                DataType::Float32 => PgType::get_by_tid(PgTypeId::ArrayFloat4),
+                                DataType::Float64 => PgType::get_by_tid(PgTypeId::ArrayFloat8),
+                                DataType::Binary => PgType::get_by_tid(PgTypeId::ArrayBytea),
+                                DataType::Utf8 => PgType::get_by_tid(PgTypeId::ArrayText),
+                                dt => {
+                                    let message = format!(
+                                        "Unsupported data type in List for pg-wire: {:?}",
+                                        dt
+                                    );
+
+                                    self.write(protocol::ErrorResponse::new(
+                                        protocol::ErrorSeverity::Error,
+                                        protocol::ErrorCode::InternalError,
+                                        message.clone(),
+                                    ))
+                                    .await?;
+
+                                    return Err(io::Error::new(io::ErrorKind::Other, message));
+                                }
+                            },
+                            dt => {
                                 let message =
-                                    format!("Unsupported data type for pg-wire: {:?}", data_type);
+                                    format!("Unsupported data type for pg-wire: {:?}", dt);
 
                                 self.write(protocol::ErrorResponse::new(
                                     protocol::ErrorSeverity::Error,
@@ -582,6 +613,7 @@ impl AsyncPostgresShim {
                     TableValue::Int64(v) => batch_writer.write_value(*v)?,
                     TableValue::Boolean(v) => batch_writer.write_value(*v)?,
                     TableValue::Float64(v) => batch_writer.write_value(*v)?,
+                    TableValue::List(v) => batch_writer.write_value(v.clone())?,
                     // @todo Support value
                     TableValue::Timestamp(v) => batch_writer.write_value(v.to_string())?,
                 };

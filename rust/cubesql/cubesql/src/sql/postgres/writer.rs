@@ -1,5 +1,10 @@
 use crate::sql::protocol::{Format, Serialize};
 
+use crate::arrow::array::{
+    ArrayRef, BooleanArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, Int8Array, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+};
+use crate::arrow::datatypes::DataType;
 use bytes::{BufMut, BytesMut};
 use std::convert::TryFrom;
 use std::io;
@@ -66,6 +71,122 @@ impl<T: ToPostgresValue> ToPostgresValue for Option<T> {
     }
 }
 
+impl ToPostgresValue for ArrayRef {
+    fn to_text(&self, buf: &mut BytesMut) -> io::Result<()> {
+        let mut values: Vec<String> = Vec::with_capacity(self.len());
+
+        macro_rules! write_native_array_to_buffer {
+            ($ARRAY:expr, $BUFF:expr, $ARRAY_TYPE: ident) => {{
+                let arr = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+
+                for i in 0..$ARRAY.len() {
+                    if self.is_null(i) {
+                        $BUFF.push("null".to_string());
+                    } else {
+                        $BUFF.push(arr.value(i).to_string());
+                    }
+                }
+            }};
+        }
+
+        match self.data_type() {
+            DataType::Float16 => write_native_array_to_buffer!(self, values, Float16Array),
+            DataType::Float32 => write_native_array_to_buffer!(self, values, Float32Array),
+            DataType::Float64 => write_native_array_to_buffer!(self, values, Float64Array),
+            // PG doesnt support i8, casting to i16
+            DataType::Int8 => write_native_array_to_buffer!(self, values, Int8Array),
+            DataType::Int16 => write_native_array_to_buffer!(self, values, Int16Array),
+            DataType::Int32 => write_native_array_to_buffer!(self, values, Int32Array),
+            DataType::Int64 => write_native_array_to_buffer!(self, values, Int64Array),
+            // PG doesnt support i8, casting to i16
+            DataType::UInt8 => write_native_array_to_buffer!(self, values, UInt8Array),
+            DataType::UInt16 => write_native_array_to_buffer!(self, values, UInt16Array),
+            DataType::UInt32 => write_native_array_to_buffer!(self, values, UInt32Array),
+            DataType::UInt64 => write_native_array_to_buffer!(self, values, UInt64Array),
+            DataType::Boolean => write_native_array_to_buffer!(self, values, BooleanArray),
+            DataType::Utf8 => write_native_array_to_buffer!(self, values, StringArray),
+            dt => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Unsupported type for list serializing: {}", dt),
+                ))
+            }
+        };
+
+        ("{".to_string() + &values.join(",") + "}").to_text(buf)
+    }
+
+    // Example for ARRAY['test1', 'test2']
+    // 0000   00 00 00 01 00 00 00 00 00 00 00 19 00 00 00 02   ................
+    // 0010   00 00 00 01 00 00 00 05 74 65 73 74 31 00 00 00   ........test1...
+    // 0020   05 74 65 73 74 32                                 .test2
+    fn to_binary(&self, buf: &mut BytesMut) -> io::Result<()> {
+        let mut tmp = BytesMut::new();
+        // dimensions
+        tmp.put_i32(1);
+        // has_nulls
+        tmp.put_i32(0);
+        // element_type
+        tmp.put_u32(19);
+        tmp.put_u32(2);
+        tmp.put_u32(1);
+
+        macro_rules! write_native_array_as_binary {
+            ($ARRAY:expr, $ARRAY_TYPE: ident, $NATIVE: tt) => {{
+                let arr = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+
+                for i in 0..$ARRAY.len() {
+                    if self.is_null(i) {
+                        let n: Option<$NATIVE> = None;
+                        n.to_binary(&mut tmp)?
+                    } else {
+                        (arr.value(i) as $NATIVE).to_binary(&mut tmp)?
+                    }
+                }
+            }};
+        }
+
+        match self.data_type() {
+            // DataType::Float16 => write_native_array_as_binary!(self, Float16Array, f32),
+            DataType::Float32 => write_native_array_as_binary!(self, Float32Array, f32),
+            DataType::Float64 => write_native_array_as_binary!(self, Float64Array, f64),
+            // PG doesnt support i8, casting to i16
+            DataType::Int8 => write_native_array_as_binary!(self, Int8Array, i16),
+            DataType::Int16 => write_native_array_as_binary!(self, Int16Array, i16),
+            DataType::Int32 => write_native_array_as_binary!(self, Int32Array, i32),
+            DataType::Int64 => write_native_array_as_binary!(self, Int64Array, i64),
+            // PG doesnt support i8, casting to i16
+            DataType::UInt8 => write_native_array_as_binary!(self, UInt8Array, i16),
+            DataType::UInt16 => write_native_array_as_binary!(self, UInt16Array, i16),
+            DataType::UInt32 => write_native_array_as_binary!(self, UInt32Array, i32),
+            DataType::UInt64 => write_native_array_as_binary!(self, UInt64Array, i64),
+            DataType::Boolean => write_native_array_as_binary!(self, BooleanArray, bool),
+            DataType::Utf8 => {
+                let arr = self.as_any().downcast_ref::<StringArray>().unwrap();
+
+                for i in 0..self.len() {
+                    if self.is_null(i) {
+                        "null".to_string().to_binary(&mut tmp)?
+                    } else {
+                        arr.value(i).to_string().to_binary(&mut tmp)?
+                    }
+                }
+            }
+            dt => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Unsupported type for list serializing: {}", dt),
+                ))
+            }
+        };
+
+        buf.put_i32(tmp.len() as i32);
+        buf.extend_from_slice(&tmp[..]);
+
+        Ok(())
+    }
+}
+
 macro_rules! impl_primitive {
     ($type: ident) => {
         impl ToPostgresValue for $type {
@@ -83,6 +204,7 @@ macro_rules! impl_primitive {
     };
 }
 
+impl_primitive!(i16);
 impl_primitive!(i32);
 impl_primitive!(i64);
 impl_primitive!(f32);

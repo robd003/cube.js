@@ -43,6 +43,7 @@ impl PostgresIntegrationTestSuite {
 
         let random_port = pick_unused_port().expect("No ports free");
         // let random_port = 5555;
+        // let random_port = 5432;
 
         tokio::spawn(async move {
             println!("[PostgresIntegrationTestSuite] Running SQL API");
@@ -118,6 +119,10 @@ impl PostgresIntegrationTestSuite {
                     701 => {
                         let value: f64 = row.get(idx);
                         values.push(value.to_string());
+                    }
+                    1009 => {
+                        let value: Vec<String> = row.get(idx);
+                        values.push(value.join(",").to_string());
                     }
                     oid => unimplemented!("Unsupported pg_type: {}", oid),
                 }
@@ -234,7 +239,8 @@ impl AsyncTestSuite for PostgresIntegrationTestSuite {
                 false as bool_false,
                 'test',
                 1.0,
-                1
+                1,
+                ARRAY['test1', 'test2'] as str_arr
             "#
             .to_string(),
         )
